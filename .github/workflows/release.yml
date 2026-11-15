@@ -21,8 +21,13 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
       - run: uv sync --locked
       - run: uv run ruff check
+      - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run pytest
+      - run: scripts/freshrss-test.sh up
+      - run: uv run pytest -m integration --no-cov
+        env:
+          FRESHRSS_TEST_URL: http://localhost:8081
       - run: docker build -t freshrss-mcp:release .
       - run: scripts/smoke.sh freshrss-mcp:release
 

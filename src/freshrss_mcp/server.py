@@ -19,13 +19,16 @@ R = TypeVar("R")
 MAX_IDS = 100
 MAX_CHARS = 20_000
 MAX_SCAN = 500
-MAX_OPML = 1_000_000
+MAX_OPML = 1_048_576  # bytes; FreshRSS reads no more than this from a request body
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
 WRITE = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+)
+WRITE_ONCE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
 )
 WRITE_EXTERNAL = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
@@ -205,11 +208,11 @@ def build_server(settings: Settings, client: FreshRSSClient | None = None) -> MC
         def freshrss_edit_feed(
             feed: str, title: str | None = None, category: str | None = None
         ) -> dict[str, str]:
-            """Rename a feed and/or move it to `category` (an empty string removes its
-            category). `feed` is the feed id, e.g. feed/12."""
+            """Rename a feed and/or move it to `category` (an empty string moves it to the
+            default category). `feed` is the feed id, e.g. feed/12."""
             return client.edit_feed(feed, title, category)
 
-        @mcp.tool(annotations=WRITE)
+        @mcp.tool(annotations=WRITE_ONCE)
         @_surface
         def freshrss_rename_category(name: str, new_name: str) -> dict[str, str]:
             """Rename a category."""
@@ -234,7 +237,7 @@ def build_server(settings: Settings, client: FreshRSSClient | None = None) -> MC
         def freshrss_import_opml(opml: str, confirm: bool = False) -> dict[str, str]:
             """Import subscriptions from OPML text (at most 1 MB). Requires confirm=true."""
             _confirm(confirm, "import OPML")
-            if len(opml) > MAX_OPML:
+            if len(opml.encode()) > MAX_OPML:
                 raise ToolError("OPML is larger than 1 MB")
             return client.import_opml(opml)
 

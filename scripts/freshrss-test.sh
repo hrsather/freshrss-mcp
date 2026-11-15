@@ -15,7 +15,7 @@ case "${1:-}" in
       -e INTERNAL_HOST_ALLOWLIST='*' \
       -e FRESHRSS_INSTALL="--api-enabled --base-url $URL --db-type sqlite --language en --default-user admin" \
       -e FRESHRSS_USER="--user admin --password adminpassword123 --api-password apipassword123 --email admin@example.com --language en" \
-      freshrss/freshrss:1.30.4 >/dev/null
+      freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df >/dev/null
     i=0
     until [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/greader.php" || true)" = "200" ]; do
       i=$((i + 1))

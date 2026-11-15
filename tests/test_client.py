@@ -199,19 +199,54 @@ def test_subscribe_edit_unsubscribe(client: FreshRSSClient) -> None:
     new = next(f for f in client.list_feeds() if f["id"] == "feed/3")
     assert (new["title"], new["categories"]) == ("Renamed", ["Moved"])
     client.edit_feed("feed/3", category="")
-    assert next(f for f in client.list_feeds() if f["id"] == "feed/3")["categories"] == []
+    assert next(f for f in client.list_feeds() if f["id"] == "feed/3")["categories"] == [
+        "Uncategorized"
+    ]
     assert client.unsubscribe("feed/3") == {"unsubscribed": "feed/3"}
     assert "feed/3" not in [f["id"] for f in client.list_feeds()]
-
-
-def test_edit_feed_unknown(client: FreshRSSClient) -> None:
-    with pytest.raises(FreshRSSError, match="feed not found: feed/99"):
-        client.edit_feed("feed/99", category="X")
 
 
 def test_subscribe_rejected_by_freshrss(client: FreshRSSClient) -> None:
     with pytest.raises(FreshRSSError, match="INTERNAL_HOST_ALLOWLIST"):
         client.subscribe("http://private.example.com/feed.xml")
+
+
+def test_a_400_is_never_retried(client: FreshRSSClient, fake: FakeGreader) -> None:
+    client.list_feeds()
+    with pytest.raises(FreshRSSError, match="HTTP 400"):
+        client.subscribe("http://private.example.com/feed.xml")
+    assert fake.logins == 1
+    assert [p for _, p, _ in fake.log].count("/reader/api/0/subscription/edit") == 1
+
+
+def test_subscribing_to_an_existing_feed_returns_it(
+    client: FreshRSSClient, fake: FakeGreader
+) -> None:
+    url = "http://feeds.example.com/alpha.xml"
+    assert client.subscribe(url) == {
+        "subscribed": url,
+        "feed_id": "feed/1",
+        "already_subscribed": True,
+    }
+    assert "/reader/api/0/subscription/edit" not in [p for _, p, _ in fake.log]
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "missing", "feed/12", "../1", "tag:google.com,2005:reader/item/zz"]
+)
+def test_invalid_article_ids_are_rejected_before_any_request(
+    client: FreshRSSClient, fake: FakeGreader, bad: str
+) -> None:
+    with pytest.raises(FreshRSSError, match="invalid article id"):
+        client.get_article(bad)
+    with pytest.raises(FreshRSSError, match="invalid article id"):
+        client.edit_tags([bad], add=READ)
+    assert fake.log == []
+
+
+def test_decimal_article_ids_are_accepted(client: FreshRSSClient) -> None:
+    with pytest.raises(FreshRSSError, match="article not found"):
+        client.get_article("123456")
 
 
 def test_rename_and_delete_category(client: FreshRSSClient) -> None:
@@ -345,8 +380,30 @@ def test_unreachable_after_login(
     monkeypatch.setattr("freshrss_mcp.client.time.sleep", lambda _: None)
     client.list_feeds()
     client._http.base_url = "http://127.0.0.1:1/api/greader.php"  # noqa: SLF001
-    with pytest.raises(FreshRSSError, match="cannot reach FreshRSS"):
+    with pytest.raises(FreshRSSError, match="cannot reach FreshRSS") as exc:
         client.list_feeds()
+    assert "may still have been applied" not in str(exc.value)
+
+
+def test_unreachable_write_says_it_may_have_been_applied(
+    client: FreshRSSClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("freshrss_mcp.client.time.sleep", lambda _: None)
+    client.edit_tags([_id(1)], add=READ)
+    client._http.base_url = "http://127.0.0.1:1/api/greader.php"  # noqa: SLF001
+    with pytest.raises(FreshRSSError, match="may still have been applied"):
+        client.edit_tags([_id(2)], add=READ)
+
+
+def test_failed_token_fetch_is_not_cached_as_the_token(
+    client: FreshRSSClient, fake: FakeGreader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("freshrss_mcp.client.time.sleep", lambda _: None)
+    client.list_feeds()
+    fake.fail_next = [500, 500, 500]
+    with pytest.raises(FreshRSSError, match="HTTP 500"):
+        client.edit_tags([_id(1)], add=READ)
+    assert client.edit_tags([_id(1)], add=READ) == 1
 
 
 def test_post_rejected_with_message(client: FreshRSSClient, fake: FakeGreader) -> None:
@@ -363,8 +420,17 @@ def test_post_rejected_with_message(client: FreshRSSClient, fake: FakeGreader) -
 def test_non_json_response(client: FreshRSSClient, fake: FakeGreader) -> None:
     client.list_feeds()
     fake._handle = lambda *a, **k: ("200 OK", "<html>", [])  # type: ignore[method-assign]  # noqa: SLF001
-    with pytest.raises(FreshRSSError, match="non-JSON"):
+    with pytest.raises(FreshRSSError, match="unexpected response"):
         client.list_feeds()
+
+
+def test_unexpected_json_shape(client: FreshRSSClient, fake: FakeGreader) -> None:
+    client.list_feeds()
+    fake._handle = lambda *a, **k: ("200 OK", '{"nope": 1}', [])  # type: ignore[method-assign]  # noqa: SLF001
+    with pytest.raises(FreshRSSError, match="unexpected response"):
+        client.list_feeds()
+    with pytest.raises(FreshRSSError, match="unexpected response"):
+        client.get_article(_id(1))
 
 
 def test_login_without_token(client: FreshRSSClient, fake: FakeGreader) -> None:

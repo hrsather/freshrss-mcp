@@ -156,8 +156,9 @@ async def test_destructive_tools_run_with_confirm(
 
 async def test_opml_size_limit(settings: Settings, client: FreshRSSClient) -> None:
     async with Client(build_server(settings, client)) as mcp:
+        # FreshRSS caps bytes, not characters: this is 524,289 characters but 1,048,578 bytes
         result = await mcp.call_tool(
-            "freshrss_import_opml", {"opml": "x" * 1_000_001, "confirm": True}
+            "freshrss_import_opml", {"opml": "é" * 524_289, "confirm": True}
         )
         assert result.is_error
         assert "1 MB" in result.content[0].text
@@ -167,10 +168,14 @@ async def test_errors_reach_the_model_as_plain_strings(
     settings: Settings, client: FreshRSSClient
 ) -> None:
     async with Client(build_server(settings, client)) as mcp:
-        result = await mcp.call_tool("freshrss_get_article", {"id": "missing"})
+        missing = f"{ITEM}{99:016x}"
+        result = await mcp.call_tool("freshrss_get_article", {"id": missing})
         assert result.is_error
-        assert "article not found: missing" in result.content[0].text
+        assert f"article not found: {missing}" in result.content[0].text
         assert "Traceback" not in result.content[0].text
+        invalid = await mcp.call_tool("freshrss_get_article", {"id": "missing"})
+        assert invalid.is_error
+        assert "invalid article id" in invalid.content[0].text
 
 
 async def test_bad_credentials_never_leak(settings: Settings) -> None:

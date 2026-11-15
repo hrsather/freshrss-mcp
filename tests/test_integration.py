@@ -145,6 +145,33 @@ def test_edit_feed_and_categories(client: FreshRSSClient, feed: str) -> None:
     assert "Moved Again" not in [c["name"] for c in client.list_categories()]
 
 
+def test_empty_category_moves_the_feed_to_the_default_one(
+    client: FreshRSSClient, feed: str
+) -> None:
+    client.edit_feed(feed, category="")
+    assert next(f for f in client.list_feeds() if f["id"] == feed)["categories"] == [
+        "Uncategorized"
+    ]
+
+
+def test_category_names_may_contain_slashes(client: FreshRSSClient, feed: str) -> None:
+    client.edit_feed(feed, category="Work/Tech")
+    assert next(f for f in client.list_feeds() if f["id"] == feed)["categories"] == ["Work/Tech"]
+    articles = client.list_articles(stream="category", target="Work/Tech")["articles"]
+    assert len(articles) == 3
+    client.mark_all_read("category", "Work/Tech")
+    assert (
+        client.list_articles(stream="category", target="Work/Tech", unread_only=True)["articles"]
+        == []
+    )
+
+
+def test_subscribing_twice_returns_the_existing_feed(client: FreshRSSClient, feed: str) -> None:
+    url = next(f for f in client.list_feeds() if f["id"] == feed)["url"]
+    again = client.subscribe(url)
+    assert again == {"subscribed": url, "feed_id": feed, "already_subscribed": True}
+
+
 def test_mark_all_read(client: FreshRSSClient, feed: str) -> None:
     client.mark_all_read("feed", feed)
     assert client.list_articles(stream="feed", target=feed, unread_only=True)["articles"] == []

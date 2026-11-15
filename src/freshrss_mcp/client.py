@@ -1,5 +1,7 @@
 import base64
 import binascii
+import logging
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -19,12 +21,36 @@ API = "/reader/api/0"
 MAX_PAGE = 50
 GET_RETRIES = 2
 STREAMS = ("unread", "all", "starred", "feed", "category")
+ARTICLE_ID = re.compile(r"tag:google\.com,2005:reader/item/[0-9a-fA-F]{1,16}|[0-9]+")
+
+TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+# FreshRSS fetches feeds inside these requests
+SLOW_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
 
 Form = list[tuple[str, str]]
 
 
 class FreshRSSError(Exception):
     pass
+
+
+def valid_article_id(value: str) -> str:
+    if not ARTICLE_ID.fullmatch(value):
+        raise FreshRSSError(
+            f"invalid article id '{value[:80]}': use an id from freshrss_list_articles, "
+            "like tag:google.com,2005:reader/item/0006604be806d1d1"
+        )
+    return value
+
+
+def _json(response: httpx.Response, key: str | None = None) -> Any:
+    try:
+        data = response.json()
+        return data if key is None else data[key]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise FreshRSSError(
+            "FreshRSS returned an unexpected response (not the expected JSON)"
+        ) from exc
 
 
 def feed_id(feed: str) -> str:
@@ -117,9 +143,11 @@ def _article(item: dict[str, Any], max_chars: int) -> dict[str, Any]:
 class FreshRSSClient:
     def __init__(self, settings: Settings, transport: httpx.BaseTransport | None = None) -> None:
         self._settings = settings
+        # httpx logs every request URL at INFO
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         self._http = httpx.Client(
             base_url=f"{settings.url}/api/greader.php",
-            timeout=httpx.Timeout(15.0, connect=5.0),
+            timeout=TIMEOUT,
             follow_redirects=False,
             transport=transport,
         )
@@ -171,8 +199,7 @@ class FreshRSSClient:
 
     def _write_token(self) -> str:
         if self._token is None:
-            response = self._send("GET", f"{API}/token")
-            self._token = response.text.strip()
+            self._token = self._request("GET", f"{API}/token").text.strip()
         return self._token
 
     def _send(
@@ -183,6 +210,7 @@ class FreshRSSClient:
         params: dict[str, str | int] | None = None,
         data: Form | None = None,
         content: bytes | None = None,
+        timeout: httpx.Timeout | None = None,
     ) -> httpx.Response:
         if self._auth is None:
             self._login()
@@ -196,13 +224,15 @@ class FreshRSSClient:
                     data=_form(data),
                     content=content,
                     headers={"Authorization": f"GoogleLogin auth={self._auth}"},
+                    timeout=timeout or TIMEOUT,
                 )
             except httpx.HTTPError as exc:
                 if attempt + 1 < attempts:
                     time.sleep(0.2 * (attempt + 1))
                     continue
+                applied = "" if method == "GET" else "; the change may still have been applied"
                 raise FreshRSSError(
-                    f"cannot reach FreshRSS at {self._settings.url} ({type(exc).__name__})"
+                    f"cannot reach FreshRSS at {self._settings.url} ({type(exc).__name__}){applied}"
                 ) from exc
             if response.status_code >= 500 and attempt + 1 < attempts:
                 time.sleep(0.2 * (attempt + 1))
@@ -219,21 +249,19 @@ class FreshRSSClient:
         data: Form | None = None,
         content: bytes | None = None,
         write: bool = False,
+        timeout: httpx.Timeout | None = None,
     ) -> httpx.Response:
+        # A bad write token and an expired login are both a 401; a 400 means the request itself
+        # was rejected and is never retried.
         for retry in (True, False):
-            body, query = data, params
-            if write:
-                token = self._write_token()
-                if content is None:
-                    body = [("T", token), *(data or [])]
-                else:
-                    query = {**(params or {}), "T": token}
-            response = self._send(method, path, params=query, data=body, content=content)
-            if (
-                response.status_code in {400, 401}
-                and retry
-                and (write or response.status_code == 401)
-            ):
+            # subscription/import takes a raw body and never checks the token
+            form = (
+                [("T", self._write_token()), *(data or [])] if write and content is None else data
+            )
+            response = self._send(
+                method, path, params=params, data=form, content=content, timeout=timeout
+            )
+            if response.status_code == 401 and retry:
                 self._auth = None
                 self._token = None
                 continue
@@ -242,23 +270,29 @@ class FreshRSSClient:
             return response
         raise AssertionError("unreachable")  # pragma: no cover
 
-    def _get_json(self, path: str, params: dict[str, str | int] | None = None) -> Any:
-        response = self._request("GET", path, params={"output": "json", **(params or {})})
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise FreshRSSError("FreshRSS returned an unexpected (non-JSON) response") from exc
+    def _get_json(
+        self, path: str, params: dict[str, str | int] | None = None, key: str | None = None
+    ) -> Any:
+        return _json(self._request("GET", path, params={"output": "json", **(params or {})}), key)
 
-    def _post_ok(self, path: str, data: Form, content: bytes | None = None) -> None:
-        response = self._request("POST", path, data=data, content=content, write=True)
+    def _post_ok(
+        self,
+        path: str,
+        data: Form,
+        content: bytes | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> None:
+        response = self._request(
+            "POST", path, data=data, content=content, write=True, timeout=timeout
+        )
         if not response.text.strip().startswith("OK"):
             raise FreshRSSError(f"FreshRSS rejected the request: {response.text.strip()[:200]}")
 
     def _subscriptions(self) -> list[dict[str, Any]]:
-        return list(self._get_json(f"{API}/subscription/list")["subscriptions"])
+        return list(self._get_json(f"{API}/subscription/list", key="subscriptions"))
 
     def _unread_by_id(self) -> dict[str, int]:
-        counts = self._get_json(f"{API}/unread-count")["unreadcounts"]
+        counts = self._get_json(f"{API}/unread-count", key="unreadcounts")
         return {entry["id"]: int(entry["count"]) for entry in counts}
 
     def list_feeds(self) -> list[dict[str, Any]]:
@@ -277,7 +311,7 @@ class FreshRSSClient:
 
     def list_categories(self) -> list[dict[str, Any]]:
         unread = self._unread_by_id()
-        tags = self._get_json(f"{API}/tag/list")["tags"]
+        tags = self._get_json(f"{API}/tag/list", key="tags")
         return [
             {"name": tag["id"][len(LABEL) :], "unread": unread.get(tag["id"], 0)}
             for tag in tags
@@ -322,8 +356,10 @@ class FreshRSSClient:
             params["ot"] = _epoch(since)
         if cursor:
             params["c"] = _decode_cursor(cursor)
-        path = f"{API}/stream/contents/{quote(stream_id(stream, target), safe='/')}"
-        result: dict[str, Any] = self._get_json(path, params)
+        sid = stream_id(stream, target)
+        # a category name may contain "/", which FreshRSS would read as a path separator
+        quoted = LABEL + quote(sid[len(LABEL) :], safe="") if sid.startswith(LABEL) else sid
+        result: dict[str, Any] = self._get_json(f"{API}/stream/contents/{quoted}", params)
         return result
 
     def list_articles(
@@ -349,9 +385,9 @@ class FreshRSSClient:
             "POST",
             f"{API}/stream/items/contents",
             params={"output": "json"},
-            data=[("i", article_id)],
+            data=[("i", valid_article_id(article_id))],
         )
-        items = response.json().get("items", [])
+        items = _json(response, "items")
         if not items:
             raise FreshRSSError(f"article not found: {article_id}")
         return _article(items[0], max_chars)
@@ -398,7 +434,7 @@ class FreshRSSClient:
         return {"articles": results, "scanned": scanned, "truncated": truncated}
 
     def edit_tags(self, ids: list[str], add: str | None = None, remove: str | None = None) -> int:
-        data: Form = [("i", item) for item in ids]
+        data: Form = [("i", valid_article_id(item)) for item in ids]
         if add:
             data.append(("a", add))
         if remove:
@@ -409,14 +445,19 @@ class FreshRSSClient:
     def subscribe(
         self, url: str, title: str | None = None, category: str | None = None
     ) -> dict[str, Any]:
+        before = self._subscriptions()
+        existing = next((sub for sub in before if sub.get("url") == url), None)
+        if existing:
+            return {"subscribed": url, "feed_id": existing["id"], "already_subscribed": True}
         data: Form = [("ac", "subscribe"), ("s", f"feed/{url}")]
         if title:
             data.append(("t", title))
         if category:
             data.append(("a", label(category)))
-        self._post_ok(f"{API}/subscription/edit", data)
-        found = [sub for sub in self._subscriptions() if sub.get("url") == url]
-        return {"subscribed": url, "feed_id": found[0]["id"] if found else None}
+        self._post_ok(f"{API}/subscription/edit", data, timeout=SLOW_TIMEOUT)
+        known = {sub["id"] for sub in before}
+        added = [sub["id"] for sub in self._subscriptions() if sub["id"] not in known]
+        return {"subscribed": url, "feed_id": added[0] if added else None}
 
     def edit_feed(
         self, feed: str, title: str | None = None, category: str | None = None
@@ -426,12 +467,7 @@ class FreshRSSClient:
         if title:
             data.append(("t", title))
         if category is not None:
-            current = next((s for s in self._subscriptions() if s["id"] == target), None)
-            if current is None:
-                raise FreshRSSError(f"feed not found: {target}")
-            data.extend(("r", c["id"]) for c in current.get("categories", []))
-            if category:
-                data.append(("a", label(category)))
+            data.append(("a", label(category)))
         self._post_ok(f"{API}/subscription/edit", data)
         return {"edited": target}
 
@@ -462,5 +498,5 @@ class FreshRSSClient:
         return {"opml": self._request("GET", f"{API}/subscription/export").text}
 
     def import_opml(self, opml: str) -> dict[str, str]:
-        self._post_ok(f"{API}/subscription/import", [], content=opml.encode())
+        self._post_ok(f"{API}/subscription/import", [], content=opml.encode(), timeout=SLOW_TIMEOUT)
         return {"imported": "ok"}

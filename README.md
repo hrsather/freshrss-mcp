@@ -84,6 +84,20 @@ Client configuration (stdio):
 }
 ```
 
+Client configuration (SSE, for a server running elsewhere):
+
+```json
+{
+  "mcpServers": {
+    "freshrss": {
+      "type": "sse",
+      "url": "http://freshrss-mcp.example.com:8080/sse",
+      "headers": { "Authorization": "Bearer <MCP_BEARER_TOKEN>" }
+    }
+  }
+}
+```
+
 ## Tools
 
 All tools return JSON and carry MCP read-only / destructive hints. Errors are plain, actionable
@@ -108,7 +122,7 @@ Write (not registered in read-only mode):
 | `freshrss_mark_read`, `freshrss_mark_unread` | By article id (max 100 per call) |
 | `freshrss_star`, `freshrss_unstar` | By article id (max 100 per call) |
 | `freshrss_subscribe` | Subscribe to a feed URL, optionally with title and category |
-| `freshrss_edit_feed` | Rename a feed and/or move it to a category |
+| `freshrss_edit_feed` | Rename a feed and/or move it to a category (`""` is the default category) |
 | `freshrss_rename_category` | Rename a category |
 
 Destructive (not registered in read-only mode; refuse unless `confirm=true`):

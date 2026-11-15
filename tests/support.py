@@ -104,12 +104,12 @@ class FakeGreader:
             return "401 Unauthorized", "Unauthorized!", []
         if path == "/reader/api/0/token":
             self.tokens += 1
-            self.valid_token = f"T{self.tokens}"
+            self.valid_token = f"token-{self.logins}"
             return "200 OK", self.valid_token, []
-        if method == "POST" and path != "/reader/api/0/stream/items/contents":
-            supplied = (form.get("T") or query.get("T") or [""])[0]
-            if supplied != self.valid_token:
-                return "400 Bad Request", "Bad Request!", []
+        no_token = {"/reader/api/0/stream/items/contents", "/reader/api/0/subscription/import"}
+        if method == "POST" and path not in no_token:
+            if form.get("T", [""])[0] != self.valid_token:
+                return "401 Unauthorized", "Unauthorized!", [("Google-Bad-Token", "true")]
         return self._handle(method, path, query, form, raw)
 
     def _login(self, form: dict[str, list[str]]) -> tuple[str, str, list[tuple[str, str]]]:
@@ -161,7 +161,8 @@ class FakeGreader:
         if path == f"{base}/disable-tag":
             gone = form["s"][0]
             for sub in self.subscriptions:
-                sub["categories"] = [c for c in sub["categories"] if c["id"] != gone]
+                if sub["categories"][0]["id"] == gone:
+                    sub["categories"] = [self._category(LABEL)]
             return "200 OK", "OK", []
         if path == f"{base}/mark-all-as-read":
             cutoff = int(form["ts"][0])
@@ -239,15 +240,14 @@ class FakeGreader:
         action, stream = form["ac"][0], form["s"][0]
         if action == "subscribe":
             url = stream.removeprefix("feed/")
-            if "private" in url:
+            if "private" in url or any(s["url"] == url for s in self.subscriptions):
                 return "400 Bad Request", "Bad Request!", []
-            cats = [{"id": a, "label": a.removeprefix(LABEL)} for a in form.get("a", [])]
             sub = {
                 "id": f"feed/{len(self.subscriptions) + 1}",
                 "title": form.get("t", [url])[0],
                 "url": url,
                 "htmlUrl": url,
-                "categories": cats,
+                "categories": [self._category(form.get("a", [LABEL])[0])],
             }
             self.subscriptions.append(sub)
         elif action == "unsubscribe":
@@ -256,12 +256,14 @@ class FakeGreader:
             sub = next(s for s in self.subscriptions if s["id"] == stream)
             if "t" in form:
                 sub["title"] = form["t"][0]
-            removed = set(form.get("r", []))
-            sub["categories"] = [c for c in sub["categories"] if c["id"] not in removed]
-            sub["categories"] += [
-                {"id": a, "label": a.removeprefix(LABEL)} for a in form.get("a", [])
-            ]
+            if "a" in form:
+                sub["categories"] = [self._category(form["a"][0])]
         return "200 OK", "OK", []
+
+    @staticmethod
+    def _category(stream: str) -> dict[str, str]:
+        name = stream.removeprefix(LABEL) or "Uncategorized"
+        return {"id": LABEL + name, "label": name}
 
     def _rename(self, form: dict[str, list[str]]) -> tuple[str, str, list[tuple[str, str]]]:
         old, new = form["s"][0], form["dest"][0]
