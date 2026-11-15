@@ -24,17 +24,19 @@ jobs:
         with:
           persist-credentials: false
       - id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version: $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" >/dev/null 2>&1; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          fi
+          # Exit 0: the tag exists. Exit 2: it does not. Anything else is a failed check, which must
+          # not be read as "no tag", or a transient error would republish an existing version.
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null || status=$?
+          case "$status" in
+            0) echo "release=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "release=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "cannot check for tag v$version (git ls-remote exit $status)" >&2; exit 1 ;;
+          esac
 
   verify:
     needs: version

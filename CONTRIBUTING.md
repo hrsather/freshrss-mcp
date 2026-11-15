@@ -14,4 +14,5 @@
 Releases follow [ZeroVer](https://0ver.org/). To release, bump `version` in `pyproject.toml` and
 `src/freshrss_mcp/__init__.py`, add a `CHANGELOG.md` entry, and merge. The release workflow then
 tests, publishes the image and creates the `vX.Y.Z` tag and GitHub Release; merges that do not
-change the version release nothing.
+change the version release nothing. If a release run fails, re-run its failed jobs before merging
+anything else, so the release is built from the same commit.
