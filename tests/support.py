@@ -6,7 +6,7 @@ from wsgiref.types import StartResponse
 
 USERNAME = "reader"
 CREDENTIAL = "api-credential-for-tests"
-BEARER = "test-bearer-token"
+BEARER = "test-bearer-token-0123456789abcdef"
 
 READ = "user/-/state/com.google/read"
 STARRED = "user/-/state/com.google/starred"

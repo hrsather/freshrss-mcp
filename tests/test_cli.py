@@ -40,7 +40,7 @@ def test_stdio_runs_server(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_sse_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
-    monkeypatch.setenv("MCP_BEARER_TOKEN", "tok")
+    monkeypatch.setenv("MCP_BEARER_TOKEN", "t" * 32)
     monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kw: calls.append(kw))
     cli.main(["--transport", "sse", "--host", "127.0.0.2", "--port", "9000"])
     assert calls == [{"host": "127.0.0.2", "port": 9000, "log_level": "warning"}]
@@ -51,3 +51,13 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
         cli.main(["--version"])
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == cli.__version__
+
+
+def test_short_bearer_token_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("MCP_BEARER_TOKEN", "short")
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--transport", "sse"])
+    assert exc.value.code == 2
+    assert "at least 32" in capsys.readouterr().err

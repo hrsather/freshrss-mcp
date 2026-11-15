@@ -27,11 +27,16 @@ Container (linux/amd64 and linux/arm64):
 
 ```sh
 docker run --rm -i \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
   -e FRESHRSS_URL=https://rss.example.com \
   -e FRESHRSS_USERNAME=me \
-  -e FRESHRSS_API_PASSWORD=... \
+  -v "$PWD/api-password:/run/secrets/api-password:ro" \
+  -e FRESHRSS_API_PASSWORD_FILE=/run/secrets/api-password \
   ghcr.io/hrsather/freshrss-mcp:0.1.0
 ```
+
+Prefer the `_FILE` variants for the password and bearer token: a value passed with `-e` shows up in
+`docker inspect` and in the host's process list.
 
 From source with [uv](https://docs.astral.sh/uv/):
 
@@ -48,7 +53,7 @@ Environment variables only.
 | `FRESHRSS_URL` | yes | Base URL of FreshRSS, e.g. `https://rss.example.com` |
 | `FRESHRSS_USERNAME` | yes | FreshRSS username |
 | `FRESHRSS_API_PASSWORD` | yes | The API password (not the login password) |
-| `MCP_BEARER_TOKEN` | for SSE | Bearer token clients must send over SSE |
+| `MCP_BEARER_TOKEN` | for SSE | Bearer token clients must send over SSE, at least 32 characters (`openssl rand -hex 32`) |
 | `FRESHRSS_READ_ONLY` | no | `true` removes every write and destructive tool |
 
 `FRESHRSS_URL`, `FRESHRSS_USERNAME`, `FRESHRSS_API_PASSWORD` and `MCP_BEARER_TOKEN` also accept a
@@ -144,7 +149,17 @@ Pass `next_cursor` from one `freshrss_list_articles` result as `cursor` to get t
   without TLS in front of it.
 - Destructive tools need an explicit `confirm=true`; set `FRESHRSS_READ_ONLY=true` if the
   assistant should never change anything.
-- The container runs as a non-root user and holds no state.
+- The container runs as a non-root user and holds no state; it also runs with `--read-only
+  --cap-drop ALL --security-opt no-new-privileges`.
+- Feed content is untrusted. Text from feeds is plain text with control and bidi characters
+  removed, but it can still contain instructions aimed at the model. `confirm=true` stops
+  accidents, not a determined prompt injection: if the assistant reads feeds you do not trust,
+  run in read-only mode or only expose the tools you need.
+- `freshrss_import_opml` rejects OPML that sets per-feed network options (`CURLOPT_*`) or dynamic
+  OPML sources, which FreshRSS would otherwise honour for API imports.
+- `freshrss_subscribe` only accepts `http(s)` URLs, but FreshRSS makes the request. Keep FreshRSS's
+  own SSRF guard on: do not set `INTERNAL_HOST_ALLOWLIST` on an instance this server can reach
+  unless you need private-address feeds.
 
 Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 

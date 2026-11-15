@@ -21,7 +21,7 @@ case "$OUT" in
 esac
 
 # shellcheck disable=SC2086
-docker run -d --name "$NAME" -p "$PORT:8080" $ENV_ARGS -e MCP_BEARER_TOKEN=smoke-token \
+docker run -d --name "$NAME" -p "$PORT:8080" $ENV_ARGS -e MCP_BEARER_TOKEN=smoke-token-0123456789abcdef0123456789 \
   "$IMAGE" --transport sse --host 0.0.0.0 --port 8080 >/dev/null
 
 i=0
@@ -39,6 +39,6 @@ NO_TOKEN="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/sse")
 [ "$NO_TOKEN" = "401" ] || { echo "expected 401 without token, got $NO_TOKEN" >&2; exit 1; }
 echo "sse 401 without token ok"
 
-WITH_TOKEN="$(curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Authorization: Bearer smoke-token' "http://127.0.0.1:$PORT/sse" || true)"
+WITH_TOKEN="$(curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Authorization: Bearer smoke-token-0123456789abcdef0123456789' "http://127.0.0.1:$PORT/sse" || true)"
 [ "$WITH_TOKEN" = "200" ] || { echo "expected 200 with token, got $WITH_TOKEN" >&2; exit 1; }
 echo "sse 200 with token ok"

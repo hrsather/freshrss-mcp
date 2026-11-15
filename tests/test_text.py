@@ -1,4 +1,9 @@
-from freshrss_mcp.text import strip_html, truncate
+from freshrss_mcp.text import clean, strip_html, truncate
+
+RLO = chr(0x202E)
+LRI = chr(0x2066)
+ZWSP = chr(0x200B)
+BOM = chr(0xFEFF)
 
 
 def test_strip_html_drops_tags_scripts_and_decodes_entities() -> None:
@@ -14,3 +19,11 @@ def test_truncate() -> None:
     assert truncate("short", 10) == ("short", False)
     assert truncate("abcdefghij", 4) == ("abcd…", True)
     assert truncate("abc", 0) == ("…", True)
+
+
+def test_strip_html_removes_control_and_bidi_characters() -> None:
+    assert strip_html(f"<p>\x1b[31mred\x07 {RLO}evil{ZWSP}{BOM}</p>") == "[31mred evil"
+
+
+def test_clean_makes_single_line_text() -> None:
+    assert clean(f"a\x1b\nb{LRI} c") == "a b c"

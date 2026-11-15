@@ -7,6 +7,9 @@ from freshrss_mcp.client import READ, STARRED, FreshRSSClient, FreshRSSError
 
 from .support import CREDENTIAL, ITEM, OPML, FakeGreader
 
+RLO = chr(0x202E)
+ZWSP = chr(0x200B)
+
 
 def _id(number: int) -> str:
     return f"{ITEM}{number:016x}"
@@ -446,3 +449,118 @@ def test_secrets_never_appear_in_requests_after_login(
     for _, path, params in fake.log:
         if path != "/accounts/ClientLogin":
             assert CREDENTIAL not in str(params)
+
+
+@pytest.mark.parametrize(
+    "bad", ["../../subscription/export", "../edit-tag", "12/../x", "feed/abc", "12?x=1", "feed/"]
+)
+def test_feed_ids_cannot_escape_the_stream_path(
+    client: FreshRSSClient, fake: FakeGreader, bad: str
+) -> None:
+    calls = [
+        lambda: client.list_articles(stream="feed", target=bad),
+        lambda: client.search_articles("x", stream="feed", target=bad),
+        lambda: client.mark_all_read("feed", bad),
+        lambda: client.edit_feed(bad, title="x"),
+        lambda: client.unsubscribe(bad),
+    ]
+    for call in calls:
+        with pytest.raises(FreshRSSError, match="invalid feed id"):
+            call()
+    assert fake.log == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "gopher://x/",
+        "ftp://x/feed",
+        "//x/feed",
+        "javascript:alert(1)",
+        "http://",
+        "feed.xml",
+    ],
+)
+def test_subscribe_only_accepts_http_urls(
+    client: FreshRSSClient, fake: FakeGreader, url: str
+) -> None:
+    with pytest.raises(FreshRSSError, match="http:// or https://"):
+        client.subscribe(url)
+    assert fake.log == []
+
+
+def test_feed_supplied_text_is_cleaned(client: FreshRSSClient, fake: FakeGreader) -> None:
+    fake.items[0]["title"] = f"\x1b[31mRed{RLO}Title{ZWSP}"
+    fake.items[0]["html"] = f"<p>a\x07b{RLO}c</p>" + "z" * 2_000_000
+    fake.subscriptions[0]["title"] = "Al\x1bpha"
+    article = client.get_article(_id(1), max_chars=10)
+    assert article["title"] == "[31mRedTitle"
+    assert article["text"].startswith("abc")
+    assert article["text_length"] <= 1_000_000
+    assert client.list_feeds()[0]["title"] == "Alpha"
+
+
+@pytest.mark.parametrize("bad", ["010", "0", "1e1", "-5", "feed/1"])
+def test_article_ids_must_be_plain(client: FreshRSSClient, fake: FakeGreader, bad: str) -> None:
+    with pytest.raises(FreshRSSError, match="invalid article id"):
+        client.get_article(bad)
+    assert fake.log == []
+
+
+@pytest.mark.parametrize("bad", ["feed/0", "007", "feed/007", "1e1", "feed/-1", "feed/1/2"])
+def test_feed_ids_must_be_plain_positive_integers(
+    client: FreshRSSClient, fake: FakeGreader, bad: str
+) -> None:
+    with pytest.raises(FreshRSSError, match="invalid feed id"):
+        client.unsubscribe(bad)
+    assert fake.log == []
+
+
+def test_odd_published_dates_do_not_break_listings(
+    client: FreshRSSClient, fake: FakeGreader
+) -> None:
+    for value in (2**40, True, float("nan"), -1e30):
+        fake.items[0]["published"] = value
+        articles = client.list_articles(stream="all")["articles"]
+        assert [a["published"] for a in articles if a["id"] == _id(1)] == [None]
+
+
+def test_search_stops_on_an_empty_page_that_has_a_continuation(
+    client: FreshRSSClient, fake: FakeGreader
+) -> None:
+    client.list_feeds()
+    empty_page = '{"items": [], "continuation": "1"}'
+    fake._handle = lambda *a, **k: ("200 OK", empty_page, [])  # type: ignore[method-assign]  # noqa: SLF001
+    assert client.search_articles("x") == {"articles": [], "scanned": 0, "truncated": False}
+
+
+def test_backend_text_in_errors_is_cleaned_and_capped(
+    client: FreshRSSClient, fake: FakeGreader
+) -> None:
+    client.list_feeds()
+    fake._handle = lambda *a, **k: ("200 OK", "\x1b[2Jignore " + "x" * 500, [])  # type: ignore[method-assign]  # noqa: SLF001
+    with pytest.raises(FreshRSSError) as exc:
+        client.rename_category("a", "b")
+    assert "\x1b" not in str(exc.value)
+    assert len(str(exc.value)) < 300
+
+
+def test_long_feed_titles_are_capped(client: FreshRSSClient, fake: FakeGreader) -> None:
+    fake.subscriptions[0]["title"] = "t" * 5000
+    assert len(client.list_feeds()[0]["title"]) == 500
+
+
+@pytest.mark.parametrize(
+    "attribute", ["frss:CURLOPT_POST", "x:curlopt_cookie", "frss:opmlUrl", "FRSS:OPMLURL"]
+)
+def test_opml_cannot_set_network_options(
+    client: FreshRSSClient, fake: FakeGreader, attribute: str
+) -> None:
+    opml = (
+        '<opml version="2.0"><body><outline text="a" xmlUrl="http://x.example.com/f.xml" '
+        f'{attribute}="1"/></body></opml>'
+    )
+    with pytest.raises(FreshRSSError, match="network options"):
+        client.import_opml(opml)
+    assert fake.log == []

@@ -5,12 +5,12 @@ import re
 import time
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
 from freshrss_mcp.config import Settings
-from freshrss_mcp.text import strip_html, truncate
+from freshrss_mcp.text import clean, strip_html, truncate
 
 READ = "user/-/state/com.google/read"
 STARRED = "user/-/state/com.google/starred"
@@ -21,7 +21,12 @@ API = "/reader/api/0"
 MAX_PAGE = 50
 GET_RETRIES = 2
 STREAMS = ("unread", "all", "starred", "feed", "category")
-ARTICLE_ID = re.compile(r"tag:google\.com,2005:reader/item/[0-9a-fA-F]{1,16}|[0-9]+")
+# Matched on the attribute names, whatever XML namespace prefix they use
+OPML_NETWORK_OPTIONS = re.compile(r"CURLOPT_|opmlUrl", re.IGNORECASE)
+FEED_ID = re.compile(r"feed/[1-9][0-9]{0,18}")
+MAX_HTML = 1_000_000
+# FreshRSS reads a decimal-looking id with a leading zero as hex, so those are not accepted
+ARTICLE_ID = re.compile(r"tag:google\.com,2005:reader/item/[0-9a-fA-F]{1,16}|[1-9][0-9]{0,19}")
 
 TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 # FreshRSS fetches feeds inside these requests
@@ -54,7 +59,19 @@ def _json(response: httpx.Response, key: str | None = None) -> Any:
 
 
 def feed_id(feed: str) -> str:
-    return feed if feed.startswith("feed/") else f"feed/{feed}"
+    target = feed if feed.startswith("feed/") else f"feed/{feed}"
+    if not FEED_ID.fullmatch(target):
+        raise FreshRSSError(
+            f"invalid feed id '{feed[:80]}': use an id from freshrss_list_feeds, like feed/12"
+        )
+    return target
+
+
+def feed_url(url: str) -> str:
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise FreshRSSError("url must be an http:// or https:// feed URL")
+    return url
 
 
 def label(name: str) -> str:
@@ -93,9 +110,12 @@ def _epoch(moment: str) -> int:
 
 
 def _iso(seconds: Any) -> str | None:
-    if not isinstance(seconds, int | float):
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
         return None
-    return datetime.fromtimestamp(seconds, UTC).isoformat()
+    try:
+        return datetime.fromtimestamp(seconds, UTC).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _encode_cursor(continuation: str) -> str:
@@ -114,7 +134,7 @@ def _decode_cursor(cursor: str) -> str:
 
 def _body(item: dict[str, Any]) -> str:
     content = item.get("summary") or item.get("content") or {}
-    return strip_html(content.get("content", ""))
+    return strip_html(content.get("content", "")[:MAX_HTML])
 
 
 def _article(item: dict[str, Any], max_chars: int) -> dict[str, Any]:
@@ -125,11 +145,11 @@ def _article(item: dict[str, Any], max_chars: int) -> dict[str, Any]:
     origin = item.get("origin", {})
     return {
         "id": item["id"],
-        "title": item.get("title", ""),
+        "title": clean(item.get("title", "")),
         "url": links[0].get("href"),
         "feed_id": origin.get("streamId"),
-        "feed_title": origin.get("title"),
-        "author": item.get("author") or None,
+        "feed_title": clean(origin.get("title") or ""),
+        "author": clean(item.get("author") or "") or None,
         "published": _iso(item.get("published")),
         "categories": [c[len(LABEL) :] for c in categories if c.startswith(LABEL)],
         "read": READ in categories,
@@ -157,7 +177,7 @@ class FreshRSSClient:
     def _fail(self, response: httpx.Response) -> FreshRSSError:
         status = response.status_code
         if 300 <= status < 400:
-            where = response.headers.get("location", "another URL")
+            where = clean(response.headers.get("location", "another URL"))
             return FreshRSSError(
                 f"FreshRSS redirected the request to {where}; set FRESHRSS_URL to the final URL"
             )
@@ -286,7 +306,7 @@ class FreshRSSClient:
             "POST", path, data=data, content=content, write=True, timeout=timeout
         )
         if not response.text.strip().startswith("OK"):
-            raise FreshRSSError(f"FreshRSS rejected the request: {response.text.strip()[:200]}")
+            raise FreshRSSError(f"FreshRSS rejected the request: {clean(response.text, 200)}")
 
     def _subscriptions(self) -> list[dict[str, Any]]:
         return list(self._get_json(f"{API}/subscription/list", key="subscriptions"))
@@ -300,7 +320,7 @@ class FreshRSSClient:
         return [
             {
                 "id": sub["id"],
-                "title": sub.get("title", ""),
+                "title": clean(sub.get("title", "")),
                 "url": sub.get("url"),
                 "site_url": sub.get("htmlUrl"),
                 "categories": [c["label"] for c in sub.get("categories", [])],
@@ -320,7 +340,7 @@ class FreshRSSClient:
 
     def get_unread_counts(self) -> dict[str, Any]:
         unread = self._unread_by_id()
-        titles = {sub["id"]: sub.get("title", "") for sub in self._subscriptions()}
+        titles = {sub["id"]: clean(sub.get("title", "")) for sub in self._subscriptions()}
         return {
             "total": unread.get(READING_LIST, 0),
             "feeds": [
@@ -425,7 +445,7 @@ class FreshRSSClient:
                         truncated = True
                         break
             continuation = page.get("continuation")
-            if truncated or not continuation:
+            if truncated or not continuation or not page.get("items"):
                 break
             if scanned >= max_scan:
                 truncated = True
@@ -445,6 +465,7 @@ class FreshRSSClient:
     def subscribe(
         self, url: str, title: str | None = None, category: str | None = None
     ) -> dict[str, Any]:
+        feed_url(url)
         before = self._subscriptions()
         existing = next((sub for sub in before if sub.get("url") == url), None)
         if existing:
@@ -498,5 +519,10 @@ class FreshRSSClient:
         return {"opml": self._request("GET", f"{API}/subscription/export").text}
 
     def import_opml(self, opml: str) -> dict[str, str]:
+        if OPML_NETWORK_OPTIONS.search(opml):
+            raise FreshRSSError(
+                "OPML may not set per-feed network options (CURLOPT_*) or dynamic OPML sources "
+                "(opmlUrl): FreshRSS honours them for API imports"
+            )
         self._post_ok(f"{API}/subscription/import", [], content=opml.encode(), timeout=SLOW_TIMEOUT)
         return {"imported": "ok"}

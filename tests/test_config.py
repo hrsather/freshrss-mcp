@@ -69,3 +69,8 @@ def test_bad_flag() -> None:
 )
 def test_flag_values(value: str, expected: bool) -> None:
     assert Settings.from_env({**BASE, "FRESHRSS_READ_ONLY": value}).read_only is expected
+
+
+def test_credentials_in_the_url_are_rejected() -> None:
+    with pytest.raises(ConfigError, match="credentials"):
+        Settings.from_env({**BASE, "FRESHRSS_URL": "https://alice:pw@rss.example.com"})

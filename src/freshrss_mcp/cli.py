@@ -8,6 +8,8 @@ from freshrss_mcp import __version__
 from freshrss_mcp.config import ConfigError, Settings
 from freshrss_mcp.server import build_server, build_sse_app
 
+MIN_TOKEN_LENGTH = 32
+
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="freshrss-mcp")
@@ -22,6 +24,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         token = settings.bearer_token
         if args.transport == "sse" and not token:
             raise ConfigError("MCP_BEARER_TOKEN is required for the sse transport")
+        if token is not None and len(token) < MIN_TOKEN_LENGTH:
+            raise ConfigError(
+                f"MCP_BEARER_TOKEN must be at least {MIN_TOKEN_LENGTH} characters, "
+                "for example the output of: openssl rand -hex 32"
+            )
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
