@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy
+      - run: uv run pytest
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync --locked
+      - name: Start FreshRSS
+        run: |
+          docker run -d --name freshrss --network host \
+            -e INTERNAL_HOST_ALLOWLIST="*" \
+            -e FRESHRSS_INSTALL="--api-enabled --base-url http://127.0.0.1 --db-type sqlite --language en --default-user admin" \
+            -e FRESHRSS_USER="--user admin --password adminpassword123 --api-password apipassword123 --email admin@example.com --language en" \
+            freshrss/freshrss:1.30.4
+          for _ in $(seq 1 60); do
+            curl -s -o /dev/null http://127.0.0.1/api/greader.php && exit 0
+            sleep 1
+          done
+          docker logs freshrss
+          exit 1
+      - run: uv run pytest -m integration --no-cov
+        env:
+          FRESHRSS_TEST_URL: http://127.0.0.1
+          FRESHRSS_TEST_USERNAME: admin
+          FRESHRSS_TEST_API_PASSWORD: apipassword123
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t freshrss-mcp:ci .
+      - run: scripts/smoke.sh freshrss-mcp:ci
