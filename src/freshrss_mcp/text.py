@@ -19,16 +19,20 @@ _BLOCK = {
 }
 _SKIP = {"script", "style"}
 # Feed text is attacker-controlled and reaches a model and terminals: drop control characters
-# (keeping whitespace), bidi overrides and isolates, zero-width space, word joiner and BOM.
+# (keeping whitespace), bidi marks, overrides and isolates, zero-width space, word joiner, BOM and
+# the invisible tag block. ZWJ and ZWNJ stay: emoji sequences and Persian text need them.
 _UNSAFE_RANGES = (
     (0x00, 0x08),
     (0x0E, 0x1F),
     (0x7F, 0x9F),
+    (0x061C, 0x061C),
+    (0x200E, 0x200F),
     (0x200B, 0x200B),
     (0x2060, 0x2060),
     (0x202A, 0x202E),
     (0x2066, 0x2069),
     (0xFEFF, 0xFEFF),
+    (0xE0000, 0xE007F),
 )
 _UNSAFE = re.compile("[" + "".join(f"{chr(lo)}-{chr(hi)}" for lo, hi in _UNSAFE_RANGES) + "]")
 

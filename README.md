@@ -36,7 +36,8 @@ docker run --rm -i \
 ```
 
 Prefer the `_FILE` variants for the password and bearer token: a value passed with `-e` shows up in
-`docker inspect` and in the host's process list.
+`docker inspect` and in the host's process list. The container runs as uid 10001, so the file must
+be readable by it (for example `chmod 644 api-password`).
 
 From source with [uv](https://docs.astral.sh/uv/):
 
@@ -96,7 +97,7 @@ Client configuration (SSE, for a server running elsewhere):
   "mcpServers": {
     "freshrss": {
       "type": "sse",
-      "url": "http://freshrss-mcp.example.com:8080/sse",
+      "url": "https://freshrss-mcp.example.com/sse",
       "headers": { "Authorization": "Bearer <MCP_BEARER_TOKEN>" }
     }
   }
@@ -149,7 +150,7 @@ Pass `next_cursor` from one `freshrss_list_articles` result as `cursor` to get t
   without TLS in front of it.
 - Destructive tools need an explicit `confirm=true`; set `FRESHRSS_READ_ONLY=true` if the
   assistant should never change anything.
-- The container runs as a non-root user and holds no state; it also runs with `--read-only
+- The container runs as a non-root user and holds no state, so it works with `--read-only
   --cap-drop ALL --security-opt no-new-privileges`.
 - Feed content is untrusted. Text from feeds is plain text with control and bidi characters
   removed, but it can still contain instructions aimed at the model. `confirm=true` stops

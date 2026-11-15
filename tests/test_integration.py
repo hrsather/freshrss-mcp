@@ -232,3 +232,11 @@ async def test_mcp_tools_end_to_end(settings: Settings, feed: str) -> None:
         await mcp.call_tool("freshrss_mark_read", {"ids": [first]})
         article = await mcp.call_tool("freshrss_get_article", {"id": first})
         assert article.structured_content["read"] is True
+
+
+def test_mark_all_read_on_starred(client: FreshRSSClient, feed: str) -> None:
+    first = client.list_articles(stream="feed", target=feed)["articles"][0]["id"]
+    client.edit_tags([first], add="user/-/state/com.google/starred")
+    client.mark_all_read("starred", None)
+    assert client.get_article(first)["read"] is True
+    client.edit_tags([first], remove="user/-/state/com.google/starred")

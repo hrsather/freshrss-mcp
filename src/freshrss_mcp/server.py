@@ -36,6 +36,9 @@ WRITE_EXTERNAL = ToolAnnotations(
 DESTRUCTIVE = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
 )
+DESTRUCTIVE_EXTERNAL = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True
+)
 
 
 def _surface(fn: Callable[P, R]) -> Callable[P, R]:
@@ -232,7 +235,7 @@ def build_server(settings: Settings, client: FreshRSSClient | None = None) -> MC
             _confirm(confirm, "delete the category")
             return client.delete_category(name)
 
-        @mcp.tool(annotations=DESTRUCTIVE)
+        @mcp.tool(annotations=DESTRUCTIVE_EXTERNAL)
         @_surface
         def freshrss_import_opml(opml: str, confirm: bool = False) -> dict[str, str]:
             """Import subscriptions from OPML text (at most 1 MB). Requires confirm=true."""

@@ -46,6 +46,8 @@ async def test_tool_set_and_annotations(settings: Settings, client: FreshRSSClie
         assert tool.annotations is not None, name
         assert tool.annotations.read_only_hint is (name in READ_TOOLS), name
         assert tool.annotations.destructive_hint is (name in DESTRUCTIVE_TOOLS), name
+        fetches = name in {"freshrss_subscribe", "freshrss_import_opml"}
+        assert tool.annotations.open_world_hint is fetches, name
 
 
 async def test_read_only_hides_write_and_destructive_tools(
