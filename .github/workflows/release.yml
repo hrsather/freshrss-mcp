@@ -1,23 +1,51 @@
 name: Release
 
+# Merging a version bump to main releases it: this workflow builds and publishes the image, then
+# creates the vX.Y.Z tag and GitHub Release. Merges that do not change the version do nothing.
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version: $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Exit 0: the tag exists. Exit 2: it does not. Anything else is a failed check, which must
+          # not be read as "no tag", or a transient error would republish an existing version.
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null || status=$?
+          case "$status" in
+            0) echo "release=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "release=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "cannot check for tag v$version (git ls-remote exit $status)" >&2; exit 1 ;;
+          esac
+
   verify:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Tag matches package version
-        env:
-          TAG: ${{ github.ref_name }}
-        run: grep -qx "version = \"${TAG#v}\"" pyproject.toml
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
       - run: uv run ruff check
@@ -32,7 +60,7 @@ jobs:
       - run: scripts/smoke.sh freshrss-mcp:release
 
   release:
-    needs: verify
+    needs: [version, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,6 +69,7 @@ jobs:
       attestations: write
     env:
       IMAGE: ghcr.io/hrsather/freshrss-mcp
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,8 +86,8 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=v${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ env.VERSION }}
             type=raw,value=latest
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -75,8 +104,7 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - name: Create GitHub Release
+      - name: Create tag and GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" --generate-notes --verify-tag
+        run: gh release create "v$VERSION" --generate-notes --target "$GITHUB_SHA"
