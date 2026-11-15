@@ -1,6 +1,5 @@
-"""Run against a real FreshRSS: set FRESHRSS_TEST_URL, FRESHRSS_TEST_USERNAME and
-FRESHRSS_TEST_API_PASSWORD. FreshRSS must be able to reach this machine at FRESHRSS_TEST_FEED_HOST
-(default 127.0.0.1) and, since the feed is local, run with INTERNAL_HOST_ALLOWLIST=*."""
+"""Run against the throwaway FreshRSS from scripts/freshrss-test.sh: start it with `up`, then set
+FRESHRSS_TEST_URL to the URL it prints."""
 
 import os
 import threading
@@ -53,8 +52,7 @@ class _FeedHandler(BaseHTTPRequestHandler):
 def feed_base() -> Iterator[str]:
     server = ThreadingHTTPServer(("0.0.0.0", 0), _FeedHandler)  # noqa: S104
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    host = os.environ.get("FRESHRSS_TEST_FEED_HOST", "127.0.0.1")
-    yield f"http://{host}:{server.server_port}"
+    yield f"http://host.docker.internal:{server.server_port}"
     server.shutdown()
     server.server_close()
 
@@ -63,8 +61,8 @@ def feed_base() -> Iterator[str]:
 def settings() -> Settings:
     return Settings(
         url=os.environ["FRESHRSS_TEST_URL"].rstrip("/"),
-        username=os.environ.get("FRESHRSS_TEST_USERNAME", "admin"),
-        api_password=os.environ["FRESHRSS_TEST_API_PASSWORD"],
+        username="admin",
+        api_password="apipassword123",
     )
 
 

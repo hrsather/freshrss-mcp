@@ -152,8 +152,8 @@ uv run ruff check && uv run ruff format --check && uv run mypy && uv run pytest
 ```
 
 Unit and protocol tests run against an in-memory fake of the API. Integration tests run against a
-real FreshRSS and are skipped unless `FRESHRSS_TEST_URL` is set; see `tests/test_integration.py`
-and the `integration` job in `.github/workflows/ci.yml`.
+real FreshRSS and are skipped unless `FRESHRSS_TEST_URL` is set; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

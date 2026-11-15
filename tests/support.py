@@ -164,8 +164,10 @@ class FakeGreader:
                 sub["categories"] = [c for c in sub["categories"] if c["id"] != gone]
             return "200 OK", "OK", []
         if path == f"{base}/mark-all-as-read":
+            cutoff = int(form["ts"][0])
             for item in self._select(form["s"][0]):
-                item["states"].add(READ)
+                if int(item["id"].rsplit("/", 1)[-1], 16) <= cutoff:
+                    item["states"].add(READ)
             return "200 OK", "OK", []
         return "404 Not Found", "", []
 

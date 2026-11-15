@@ -231,6 +231,22 @@ def test_mark_all_read(client: FreshRSSClient) -> None:
     assert client.list_articles(stream="unread")["articles"] == []
 
 
+def test_mark_all_read_cuts_off_at_the_newest_article_not_the_clock(
+    client: FreshRSSClient, fake: FakeGreader
+) -> None:
+    client.mark_all_read("feed", "1")
+    assert fake.log[-1][2]["ts"] == ["2"]
+
+
+def test_mark_all_read_on_an_empty_stream_sends_nothing(
+    client: FreshRSSClient, fake: FakeGreader
+) -> None:
+    fake.items = []
+    result = client.mark_all_read("all", None)
+    assert result == {"marked_read": "user/-/state/com.google/reading-list"}
+    assert "/reader/api/0/mark-all-as-read" not in [p for _, p, _ in fake.log]
+
+
 def test_opml_roundtrip(client: FreshRSSClient, fake: FakeGreader) -> None:
     assert "<opml>" in client.export_opml()["opml"]
     assert client.import_opml(OPML) == {"imported": "ok"}

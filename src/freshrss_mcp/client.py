@@ -450,8 +450,12 @@ class FreshRSSClient:
 
     def mark_all_read(self, stream: str, target: str | None) -> dict[str, str]:
         target_id = stream_id(stream, target)
-        now_usec = str(int(time.time() * 1_000_000))
-        self._post_ok(f"{API}/mark-all-as-read", [("s", target_id), ("ts", now_usec)])
+        newest = self._page(stream, target, 1, None, None, "newest", False).get("items", [])
+        if newest:
+            # FreshRSS marks entries with id <= ts, and ids come from its clock, so cut off at
+            # the newest article's own id instead of this machine's clock.
+            cutoff = str(int(newest[0]["id"].rsplit("/", 1)[-1], 16))
+            self._post_ok(f"{API}/mark-all-as-read", [("s", target_id), ("ts", cutoff)])
         return {"marked_read": target_id}
 
     def export_opml(self) -> dict[str, str]:
