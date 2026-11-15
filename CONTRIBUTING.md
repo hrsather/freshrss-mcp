@@ -11,4 +11,7 @@
 5. Use synthetic data only: `example.com` URLs and placeholder feeds and articles.
 6. Open a pull request. CI must pass.
 
-Releases follow [ZeroVer](https://0ver.org/) and are cut by tagging `vX.Y.Z`.
+Releases follow [ZeroVer](https://0ver.org/). To release, bump `version` in `pyproject.toml` and
+`src/freshrss_mcp/__init__.py`, add a `CHANGELOG.md` entry, and merge. The release workflow then
+tests, publishes the image and creates the `vX.Y.Z` tag and GitHub Release; merges that do not
+change the version release nothing.
